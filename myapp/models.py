@@ -1,11 +1,12 @@
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
-import uuid
-from datetime import timedelta
 from django.utils import timezone
 import random
 import string
-
+from datetime import timedelta
+from django.conf import settings
+import os
+import uuid
 class UserManager(BaseUserManager):
     def create_user(self, email, username, password=None):
         if not email:
@@ -44,8 +45,8 @@ class User(AbstractBaseUser, PermissionsMixin):
         FEMALE = 'F', 'Female'
 
     id = models.AutoField(primary_key=True)
-    firstname = models.CharField(max_length=100, blank=True, null=True)
-    lastname = models.CharField(max_length=100, blank=True, null=True)
+    first_name = models.CharField(max_length=100, blank=True, null=True)
+    last_name = models.CharField(max_length=100, blank=True, null=True)
     username = models.CharField(max_length=100, unique=True)
     gender = models.CharField(max_length=10, choices=Gender.choices, blank=True, null=True)
     phone = models.CharField(max_length=15, unique=True, blank=True, null=True)
@@ -55,12 +56,11 @@ class User(AbstractBaseUser, PermissionsMixin):
     last_login = models.DateTimeField(auto_now=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    verification_code = models.IntegerField(blank=True, null=True)
     is_verified = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     is_admin = models.BooleanField(default=False)
     otp_code = models.CharField(max_length=6, blank=True, null=True)
-    otp_expires_at = models.DateTimeField(blank=True, null=True)    
+    otp_expires_at = models.DateTimeField(blank=True, null=True)
     objects = UserManager()
 
     USERNAME_FIELD = 'email'
@@ -100,18 +100,28 @@ class UserRole(models.Model):
     id = models.AutoField(primary_key=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     role = models.ForeignKey(Role, on_delete=models.CASCADE)
+
 class CategoryType(models.Model):
     id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=255)
-    created_at = models.DateTimeField(auto_now_add=True)  
+    category_image = models.CharField(max_length=255, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
 class Category(models.Model):
     id = models.AutoField(primary_key=True)
     category_name = models.CharField(max_length=255)
     category_type = models.ForeignKey(CategoryType, on_delete=models.CASCADE)
-    category_image = models.CharField(max_length=255, blank=True, null=True)
     parent = models.ForeignKey('self', on_delete=models.CASCADE, blank=True, null=True)
+class Location(models.Model):
+    id = models.AutoField(primary_key=True)
+    province = models.CharField(max_length=255)
+    district = models.CharField(max_length=255)
+    commune = models.CharField(max_length=255)
+    village = models.CharField(max_length=255)
+    postal_code = models.IntegerField()
 
+    def __str__(self):
+        return f'{self.village}, {self.commune}, {self.district}, {self.province}'
 class Service(models.Model):
     id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=255)
@@ -124,47 +134,68 @@ class Service(models.Model):
     start_time = models.TimeField()
     end_time = models.TimeField()
     category = models.ForeignKey(Category, on_delete=models.CASCADE)
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, related_name='created_services', null=True, blank=True)
+    location = models.ForeignKey(Location, on_delete=models.CASCADE)
+    def __str__(self):
+        return self.name
 class Review(models.Model):
     id = models.AutoField(primary_key=True)
     comment = models.TextField()
     rate_star = models.IntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
-    service = models.ForeignKey(Service, on_delete=models.CASCADE)
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-
+    service = models.ForeignKey('Service', on_delete=models.CASCADE)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, related_name='created_reviews', null=True, blank=True)
+    like_count = models.PositiveIntegerField(default=0)
+    unlike_count = models.PositiveIntegerField(default=0)
+    def __str__(self):
+        return self.comment
 class Like(models.Model):
     id = models.AutoField(primary_key=True)
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    review = models.ForeignKey(Review, on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    review = models.ForeignKey('Review', on_delete=models.CASCADE, related_name='likes')
     like_at = models.DateTimeField(auto_now_add=True)
 
 class Unlike(models.Model):
     id = models.AutoField(primary_key=True)
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    review = models.ForeignKey(Review, on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    review = models.ForeignKey('Review', on_delete=models.CASCADE, related_name='unlikes')
     unlike_at = models.DateTimeField(auto_now_add=True)
 
 class Report(models.Model):
     id = models.AutoField(primary_key=True)
     description = models.TextField()
     reported_at = models.DateTimeField(auto_now_add=True)
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
     service = models.ForeignKey(Service, on_delete=models.CASCADE)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, related_name='created_reports', null=True, blank=True)
 
 class Mail(models.Model):
     id = models.AutoField(primary_key=True)
     message = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_mails')
     sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_mails')
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_mails', null=True, blank=True)
 
-class Location(models.Model):
-    id = models.AutoField(primary_key=True)
-    province = models.CharField(max_length=255)
-    district = models.CharField(max_length=255)
-    commune = models.CharField(max_length=255)
-    village = models.CharField(max_length=255)
-    postal_code = models.IntegerField()
-    service = models.ForeignKey(Service, on_delete=models.CASCADE)
+def upload_to(instance, filename):
+    ext = filename.split('.')[-1]
+    filename = f"category_{uuid.uuid4()}.{ext}"
+    return os.path.join('uploads/', filename)
+class UploadedFile(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    file = models.FileField(upload_to=upload_to)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if not self.id:
+            self.id = uuid.uuid4()
+        if self.file and not self._state.adding:
+            original_extension = os.path.splitext(self.file.name)[1]
+            self.file.name = f"category_{self.id}{original_extension}"
+        super().save(*args, **kwargs)
+
+    @property
+    def filename(self):
+        return self.file.name
+
+    @property
+    def url(self):
+        return self.file.url

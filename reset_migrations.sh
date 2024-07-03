@@ -11,6 +11,7 @@ migrate_and_init_roles() {
     python manage.py makemigrations
     python manage.py migrate
     python manage.py add_default_roles
+    python manage.py initialize_categories
 }
 
 # Main script

@@ -15,6 +15,7 @@ router.register(r'user-roles', UserRoleViewSet)
 router.register(r'reports', ReportViewSet)
 router.register(r'mails', MailViewSet)
 router.register(r'locations', LocationViewSet)
+router.register(r'upload', FileUploadView)
 
 urlpatterns = [
     path('api/', include(router.urls)),

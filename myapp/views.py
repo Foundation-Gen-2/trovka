@@ -12,6 +12,11 @@ from rest_framework.exceptions import AuthenticationFailed, NotAuthenticated
 from django.contrib.auth import authenticate
 from .permissions import IsProvider, IsAdmin, IsUser
 from .permissions import IsProviderOrAdmin
+from rest_framework.decorators import action
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.filters import SearchFilter
+from django_filters.rest_framework import DjangoFilterBackend
+from .filters import ServiceFilter
 
 # class UserRegistrationView(APIView):
 #     permission_classes = [AllowAny]
@@ -191,8 +196,8 @@ class CategoryTypeViewSet(viewsets.ModelViewSet):
     serializer_class = CategoryTypeSerializer
 
     def get_permissions(self):
-        if self.action in ['create']:
-            self.permission_classes = [IsAuthenticated, IsProviderOrAdmin]
+        if self.action == 'create':
+            self.permission_classes = [IsAuthenticated, IsAdmin]
         else:
             self.permission_classes = [IsAuthenticated]
         return super(CategoryTypeViewSet, self).get_permissions()
@@ -200,7 +205,7 @@ class CategoryTypeViewSet(viewsets.ModelViewSet):
 class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated,IsProvider]
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -208,22 +213,44 @@ class CategoryViewSet(viewsets.ModelViewSet):
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         return Response({"message": "Category created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
-
 class ServiceViewSet(viewsets.ModelViewSet):
     queryset = Service.objects.all()
-    serializer_class = ServiceSerializer
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+    filterset_class = ServiceFilter
+    search_fields = ['name', 'description', 'category__category_name', 'location__province']
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return ServiceListSerializer
+        return ServiceSerializer
 
     def get_queryset(self):
-        return Service.objects.filter(user=self.request.user)
+        if self.action == 'list':
+            return Service.objects.all()
+        return Service.objects.filter(created_by=self.request.user)
 
     def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update']:
-            self.permission_classes = [IsAuthenticated, IsProvider]
-        elif self.action in ['destroy']:
-            self.permission_classes = [IsAuthenticated, IsAdmin]
-        elif self.action in ['list', 'retrieve']:
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
             self.permission_classes = [IsAuthenticated]
+            if self.action == 'create':
+                self.permission_classes += [IsProvider]
+            elif self.action in ['update', 'partial_update']:
+                self.permission_classes += [IsProvider]
+            elif self.action == 'destroy':
+                self.permission_classes += [IsAdmin]
+        elif self.action in ['retrieve']:
+            self.permission_classes = [IsAuthenticated]
+        elif self.action == 'list':
+            self.permission_classes = [IsAuthenticatedOrReadOnly]
         return super(ServiceViewSet, self).get_permissions()
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            "message": "List of all services.",
+            "data": serializer.data
+        }, status=status.HTTP_200_OK)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -233,7 +260,18 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return Response({"message": "Service created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        serializer.save(created_by=self.request.user)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)
+
+    def perform_update(self, serializer):
+        serializer.save()
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -243,13 +281,95 @@ class ServiceViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         instance.delete()
 
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def my_services(self, request):
+        user_services = Service.objects.filter(created_by=request.user)
+        serializer = self.get_serializer(user_services, many=True)
+        if user_services.exists():
+            return Response({
+                "message": "Here are your services.",
+                "data": serializer.data
+            })
+        else:
+            return Response({
+                "message": "You have no services.",
+                "data": []
+            }, status=status.HTTP_200_OK)
+# class ServiceViewSet(viewsets.ModelViewSet):
+    queryset = Service.objects.all()
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return ServiceListSerializer
+        return ServiceSerializer
+
+    def get_queryset(self):
+        if self.action == 'list':
+            return Service.objects.all()
+        return Service.objects.filter(created_by=self.request.user)
+
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            self.permission_classes = [IsAuthenticated]
+            if self.action == 'create':
+                self.permission_classes += [IsProvider]
+            elif self.action == 'destroy':
+                self.permission_classes += [IsAdmin]
+        elif self.action in ['retrieve']:
+            self.permission_classes = [IsAuthenticated]
+        elif self.action == 'list':
+            self.permission_classes = [IsAuthenticatedOrReadOnly]
+        return super(ServiceViewSet, self).get_permissions()
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            "message": "List of all services.",
+            "data": serializer.data
+        }, status=status.HTTP_200_OK)
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response({"message": "Service created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.created_by != request.user:
+            return Response({"message": "You are not allowed to update this service."}, status=status.HTTP_403_FORBIDDEN)
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response({"message": "Service updated successfully", "data": serializer.data}, status=status.HTTP_200_OK)
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response({"message": "Service deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
+
+    def perform_destroy(self, instance):
+        instance.delete()
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def my_services(self, request):
+        user_services = Service.objects.filter(created_by=request.user)
+        serializer = self.get_serializer(user_services, many=True)
+        if user_services.exists():
+            return Response({
+                "message": "Here are your services.",
+                "data": serializer.data,
+                "status": "200"
+
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                "message": "You have no services.",
+                "data": "data not found"
+            }, status=status.HTTP_404_NOT_FOUND)
 class ReviewViewSet(viewsets.ModelViewSet):
     queryset = Review.objects.all()
     serializer_class = ReviewSerializer
     permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        return Review.objects.filter(user=self.request.user)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -259,7 +379,7 @@ class ReviewViewSet(viewsets.ModelViewSet):
         return Response({"message": "Review created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        serializer.save(created_by=self.request.user)
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -274,8 +394,8 @@ class LikeViewSet(viewsets.ModelViewSet):
     serializer_class = LikeSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
-        return Like.objects.filter(user=self.request.user)
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -283,9 +403,6 @@ class LikeViewSet(viewsets.ModelViewSet):
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         return Response({"message": "Like created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
-
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -300,8 +417,8 @@ class UnlikeViewSet(viewsets.ModelViewSet):
     serializer_class = UnlikeSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
-        return Unlike.objects.filter(user=self.request.user)
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -309,9 +426,6 @@ class UnlikeViewSet(viewsets.ModelViewSet):
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         return Response({"message": "Unlike created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
-
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -321,13 +435,44 @@ class UnlikeViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         instance.delete()
 
+
+class LocationViewSet(viewsets.ModelViewSet):
+    queryset = Location.objects.all()
+    serializer_class = LocationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Location.objects.filter(service__created_by=self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response({"message": "Location created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
+
+    def perform_create(self, serializer):
+        serializer.save()
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response({"message": "Location updated successfully", "data": serializer.data}, status=status.HTTP_200_OK)
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response({"message": "Location deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
+
+    def perform_destroy(self, instance):
+        instance.delete()   
 class ReportViewSet(viewsets.ModelViewSet):
     queryset = Report.objects.all()
     serializer_class = ReportSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Report.objects.filter(user=self.request.user)
+        return Report.objects.filter(created_by=self.request.user)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -337,7 +482,7 @@ class ReportViewSet(viewsets.ModelViewSet):
         return Response({"message": "Report created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        serializer.save(created_by=self.request.user)
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -353,7 +498,7 @@ class MailViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Mail.objects.filter(user=self.request.user) | Mail.objects.filter(sender=self.request.user)
+        return Mail.objects.filter(recipient=self.request.user) | Mail.objects.filter(sender=self.request.user)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -363,7 +508,7 @@ class MailViewSet(viewsets.ModelViewSet):
         return Response({"message": "Mail created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        serializer.save(sender=self.request.user)
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -373,224 +518,38 @@ class MailViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         instance.delete()
 
-class LocationViewSet(viewsets.ModelViewSet):
-    queryset = Location.objects.all()
-    serializer_class = LocationSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        return Location.objects.filter(service__user=self.request.user)
+class FileUploadView(viewsets.ModelViewSet):
+    queryset = UploadedFile.objects.all()
+    serializer_class = UploadedFileSerializer
+    parser_classes = [MultiPartParser, FormParser]
+    permission_classes = [AllowAny]
 
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
+        serializer = self.get_serializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            response_data = serializer.data
+            return Response(response_data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)    
+
+
+    def create(self, request, *args, **kwargs):
+        data = request.data
+        data['user'] = request.user.id
+        serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
-        headers = self.get_success_headers(serializer.data)
-        return Response({"message": "Location created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
+        return Response({"message": "Social media link created successfully.", "data": serializer.data}, status=status.HTTP_201_CREATED)
 
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response({"message": "Social media link updated successfully.", "data": serializer.data}, status=status.HTTP_200_OK)
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         self.perform_destroy(instance)
-        return Response({"message": "Location deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
-
-    def perform_destroy(self, instance):
-        instance.delete()    
-# class CategoryTypeViewSet(viewsets.ModelViewSet):
-#     queryset = CategoryType.objects.all()
-#     serializer_class = CategoryTypeSerializer
-
-#     def get_permissions(self):
-#         if self.action in ['create']:
-#             self.permission_classes = [IsAuthenticated, IsProviderOrAdmin]
-#         else:
-#             self.permission_classes = [IsAuthenticated]
-#         return super(CategoryTypeViewSet, self).get_permissions()
-
-# class CategoryViewSet(viewsets.ModelViewSet):
-#     queryset = Category.objects.all()
-#     serializer_class = CategorySerializer
-#     permission_classes = [IsAuthenticated]
-
-#     def create(self, request, *args, **kwargs):
-#         serializer = self.get_serializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-#         self.perform_create(serializer)
-#         headers = self.get_success_headers(serializer.data)
-#         return Response({"message": "Category created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
-
-# class ServiceViewSet(viewsets.ModelViewSet):
-#     queryset = Service.objects.all()
-#     serializer_class = ServiceSerializer
-
-#     def get_permissions(self):
-#         if self.action in ['create', 'update', 'partial_update']:
-#             self.permission_classes = [IsAuthenticated, IsProvider]
-#         elif self.action in ['destroy']:
-#             self.permission_classes = [IsAuthenticated, IsAdmin]
-#         elif self.action in ['list', 'retrieve']:
-#             self.permission_classes = [IsAuthenticated]
-#         return super(ServiceViewSet, self).get_permissions()
-
-#     def create(self, request, *args, **kwargs):
-#         serializer = self.get_serializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-#         self.perform_create(serializer)
-#         headers = self.get_success_headers(serializer.data)
-#         return Response({"message": "Service created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
-
-#     def perform_create(self, serializer):
-#         serializer.save(user=self.request.user)
-
-
-# class ReviewViewSet(viewsets.ModelViewSet):
-#     serializer_class = ReviewSerializer
-#     permission_classes = [IsAuthenticated]
-
-#     def get_queryset(self):
-#         return Review.objects.filter(user=self.request.user)
-
-#     def create(self, request, *args, **kwargs):
-#         serializer = self.get_serializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-#         self.perform_create(serializer)
-#         headers = self.get_success_headers(serializer.data)
-#         return Response({"message": "Review created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
-
-#     def perform_create(self, serializer):
-#         serializer.save(user=self.request.user)
-
-#     def destroy(self, request, *args, **kwargs):
-#         instance = self.get_object()
-#         self.perform_destroy(instance)
-#         return Response({"message": "Review deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
-
-#     def perform_destroy(self, instance):
-#         instance.delete()
-
-# class LikeViewSet(viewsets.ModelViewSet):
-#     serializer_class = LikeSerializer
-#     permission_classes = [IsAuthenticated]
-
-#     def get_queryset(self):
-#         return Like.objects.filter(user=self.request.user)
-
-#     def create(self, request, *args, **kwargs):
-#         serializer = self.get_serializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-#         self.perform_create(serializer)
-#         headers = self.get_success_headers(serializer.data)
-#         return Response({"message": "Like created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
-
-#     def perform_create(self, serializer):
-#         serializer.save(user=self.request.user)
-
-#     def destroy(self, request, *args, **kwargs):
-#         instance = self.get_object()
-#         self.perform_destroy(instance)
-#         return Response({"message": "Like deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
-
-#     def perform_destroy(self, instance):
-#         instance.delete()
-
-# class UnlikeViewSet(viewsets.ModelViewSet):
-#     serializer_class = UnlikeSerializer
-#     permission_classes = [IsAuthenticated]
-
-#     def get_queryset(self):
-#         return Unlike.objects.filter(user=self.request.user)
-
-#     def create(self, request, *args, **kwargs):
-#         serializer = self.get_serializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-#         self.perform_create(serializer)
-#         headers = self.get_success_headers(serializer.data)
-#         return Response({"message": "Unlike created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
-
-#     def perform_create(self, serializer):
-#         serializer.save(user=self.request.user)
-
-#     def destroy(self, request, *args, **kwargs):
-#         instance = self.get_object()
-#         self.perform_destroy(instance)
-#         return Response({"message": "Unlike deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
-
-#     def perform_destroy(self, instance):
-#         instance.delete()
-
-# class ReportViewSet(viewsets.ModelViewSet):
-#     serializer_class = ReportSerializer
-#     permission_classes = [IsAuthenticated]
-
-#     def get_queryset(self):
-#         return Report.objects.filter(user=self.request.user)
-
-#     def create(self, request, *args, **kwargs):
-#         serializer = self.get_serializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-#         self.perform_create(serializer)
-#         headers = self.get_success_headers(serializer.data)
-#         return Response({"message": "Report created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
-
-#     def perform_create(self, serializer):
-#         serializer.save(user=self.request.user)
-
-#     def destroy(self, request, *args, **kwargs):
-#         instance = self.get_object()
-#         self.perform_destroy(instance)
-#         return Response({"message": "Report deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
-
-#     def perform_destroy(self, instance):
-#         instance.delete()
-
-# class MailViewSet(viewsets.ModelViewSet):
-#     serializer_class = MailSerializer
-#     permission_classes = [IsAuthenticated]
-
-#     def get_queryset(self):
-#         return Mail.objects.filter(user=self.request.user) | Mail.objects.filter(sender=self.request.user)
-
-#     def create(self, request, *args, **kwargs):
-#         serializer = self.get_serializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-#         self.perform_create(serializer)
-#         headers = self.get_success_headers(serializer.data)
-#         return Response({"message": "Mail created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
-
-#     def perform_create(self, serializer):
-#         serializer.save(user=self.request.user)
-
-#     def destroy(self, request, *args, **kwargs):
-#         instance = self.get_object()
-#         self.perform_destroy(instance)
-#         return Response({"message": "Mail deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
-
-#     def perform_destroy(self, instance):
-#         instance.delete()
-
-# class LocationViewSet(viewsets.ModelViewSet):
-#     serializer_class = LocationSerializer
-#     permission_classes = [IsAuthenticated]
-
-#     def get_queryset(self):
-#         return Location.objects.filter(service__user=self.request.user)
-
-#     def create(self, request, *args, **kwargs):
-#         serializer = self.get_serializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-#         self.perform_create(serializer)
-#         headers = self.get_success_headers(serializer.data)
-#         return Response({"message": "Location created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
-
-#     def perform_create(self, serializer):
-#         serializer.save(user=self.request.user)
-
-#     def destroy(self, request, *args, **kwargs):
-#         instance = self.get_object()
-#         self.perform_destroy(instance)
-#         return Response({"message": "Location deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
-
-#     def perform_destroy(self, instance):
-#         instance.delete()
+        return Response({"message": "Social media link deleted successfully."}, status=status.HTTP_200_OK) 
