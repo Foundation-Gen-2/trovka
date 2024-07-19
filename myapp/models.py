@@ -119,9 +119,11 @@ class Location(models.Model):
     commune = models.CharField(max_length=255)
     village = models.CharField(max_length=255)
     postal_code = models.IntegerField()
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='locations')
 
     def __str__(self):
         return f'{self.village}, {self.commune}, {self.district}, {self.province}'
+
 class Service(models.Model):
     id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=255)
@@ -135,7 +137,8 @@ class Service(models.Model):
     end_time = models.TimeField()
     category = models.ForeignKey(Category, on_delete=models.CASCADE)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, related_name='created_services', null=True, blank=True)
-    location = models.ForeignKey(Location, on_delete=models.CASCADE)
+    location = models.ForeignKey(Location, on_delete=models.CASCADE, related_name='services')
+
     def __str__(self):
         return self.name
 class Review(models.Model):

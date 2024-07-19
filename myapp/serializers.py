@@ -5,7 +5,7 @@ import django_filters
 class UserSimpleSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['username']
+        fields = ['username','phone']
 class UserRegistrationSerializer(serializers.ModelSerializer):
     confirmPassword = serializers.CharField(style={'input_type': 'password'}, write_only=True)
 
@@ -81,6 +81,8 @@ class CategoryTypeSerializer(serializers.ModelSerializer):
         model = CategoryType
         fields = '__all__'
 class LocationSerializer(serializers.ModelSerializer):
+    created_by = serializers.ReadOnlyField(source='created_by.username')
+
     class Meta:
         model = Location
         fields = '__all__'
@@ -90,31 +92,35 @@ class CategorySerializer(serializers.ModelSerializer):
         model = Category
         fields = '__all__'
 class ServiceListSerializer(serializers.ModelSerializer):
-    created_by = UserSimpleSerializer(read_only=True)
-    created_by = serializers.CharField(source='created_by.username', read_only=True)
-    # category = CategorySerializer(read_only=True)
+    created_by = UserProfileSerializer(read_only=True)
+    categoryType = serializers.CharField(source='category.category_type.name', read_only=True)
     category = serializers.CharField(source='category.category_name', read_only=True)
-    # location = serializers.SlugRelatedField(slug_field='id', queryset=Location.objects.all())
     location = LocationSerializer(read_only=True)
-    class Meta:
-        model = Service
-        fields = '__all__'
-        read_only_fields = ['created_by']
-class ServiceSerializer(serializers.ModelSerializer):
-    created_by = serializers.CharField(source='created_by.username', read_only=True)
-    location = serializers.PrimaryKeyRelatedField(queryset=Location.objects.all())
+    phone_number = serializers.CharField(source='created_by.phone', read_only=True)
 
     class Meta:
         model = Service
         fields = '__all__'
         read_only_fields = ['created_by']
+
+class ServiceSerializer(serializers.ModelSerializer):
+    created_by = UserProfileSerializer(read_only=True)
+    # created_by = serializers.CharField(source='created_by.username', read_only=True)
+    location = serializers.PrimaryKeyRelatedField(queryset=Location.objects.all())
+    phone_number = serializers.CharField(source='created_by.phone', read_only=True)
+    categoryType = serializers.CharField(source='category.category_type.name', read_only=True)
+    category = serializers.PrimaryKeyRelatedField(queryset=Category.objects.all())
+
+    class Meta:
+        model = Service
+        fields = '__all__'
 
     def validate(self, data):
         if 'category' not in data:
             raise serializers.ValidationError("Category field is required.")
         
-        if not CategoryType.objects.filter(id=data['category'].category_type.id).exists():
-            raise serializers.ValidationError("Category Type does not exist.")
+        if not Category.objects.filter(id=data['category'].id).exists():
+            raise serializers.ValidationError("Category does not exist.")
         return data
 
     def create(self, validated_data):
@@ -123,34 +129,7 @@ class ServiceSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         instance = super().update(instance, validated_data)
-        return instance      
-# class ServiceSerializer(serializers.ModelSerializer):
-#     created_by = UserSimpleSerializer(read_only=True)
-#     created_by = serializers.CharField(source='created_by.username', read_only=True)
-#     location = serializers.SlugRelatedField(slug_field='id', queryset=Location.objects.all())
-
-#     class Meta:
-#         model = Service
-#         fields = '__all__'
-#         read_only_fields = ['created_by']
-
-#     def validate(self, data):
-#         if not CategoryType.objects.filter(id=data['category'].category_type.id).exists():
-#             raise serializers.ValidationError("Category Type does not exist.")
-#         return data
-
-#     def create(self, validated_data):
-#         request = self.context.get('request', None)
-#         if request and request.user:
-#             validated_data['created_by'] = request.user
-#         service = super().create(validated_data)
-#         service.save()
-#         return service
-
-#     def update(self, instance, validated_data):
-#         instance = super().update(instance, validated_data)
-#         instance.save()
-#         return instance
+        return instance
 
 class ReviewSerializer(serializers.ModelSerializer):
     created_by = serializers.CharField(source='created_by.username', read_only=True)

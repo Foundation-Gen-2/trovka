@@ -89,7 +89,17 @@ class UserRegistrationView(APIView):
                         settings.DEFAULT_FROM_EMAIL,
                         [user.email],
                     )
-                    return Response({"message": "User created. Check your email for the OTP code."}, status=status.HTTP_201_CREATED)
+                    user_data = UserSerializer(user).data
+                    user_data['role'] = RoleSerializer(role).data
+                    role = UserRole.objects.filter(user=user).first().role
+
+                    return Response({
+                        "message": "User created. Check your email for the OTP code.",
+                        "status": status.HTTP_201_CREATED,
+                        'role': {
+                            'role_name': role.role_name,
+                        }                        
+                    }, status=status.HTTP_201_CREATED)
                 except Exception as e:
                     return Response({"message": f"User created but failed to send OTP email: {str(e)}"}, status=status.HTTP_201_CREATED)
             except Role.DoesNotExist:
@@ -124,8 +134,43 @@ class UserRegistrationView(APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
+class UpdateUserRoleView(APIView):
+    permission_classes = [IsAuthenticated, IsProvider]  # Only admin can update roles
+
+    def post(self, request):
+        user_id = request.data.get('user_id')
+        role_name = request.data.get('role_name')
+
+        try:
+            user = User.objects.get(id=user_id)
+            role = Role.objects.get(role_name=role_name)
+            user_details = UserSerializer(user).data
+            # Ensure no duplicate UserRole entries
+            user_roles = UserRole.objects.filter(user=user)
+            if user_roles.count() > 1:
+                user_roles.delete()  # Remove all existing roles for the user
+            
+            # Update or create the UserRole
+            user_role, created = UserRole.objects.update_or_create(user=user, defaults={'role': role})
+
+            return Response({
+                "message": "User role updated successfully.",
+                "user": {
+                    "username": user.username,
+                    "email": user.email
+                },
+                "role": {
+                    "role_name": role.role_name,
+                }
+            }, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response({"error": "User does not exist."}, status=status.HTTP_404_NOT_FOUND)
+        except Role.DoesNotExist:
+            return Response({"error": f"Role '{role_name}' does not exist."}, status=status.HTTP_400_BAD_REQUEST)
+
 class LoginView(APIView):
     permission_classes = [AllowAny]
+
     def post(self, request):
         email = request.data.get('email')
         password = request.data.get('password')
@@ -133,9 +178,18 @@ class LoginView(APIView):
 
         if user is not None:
             refresh = RefreshToken.for_user(user)
+            role = UserRole.objects.filter(user=user).first().role
             return Response({
                 'refresh': str(refresh),
                 'access': str(refresh.access_token),
+                'status': '200',
+                'user': {
+                    'username': user.username,
+                    'id': user.id,
+                },
+                'role': {
+                    'role_name': role.role_name,
+                }
             })
         return Response({"message": "Invalid email or password"}, status=status.HTTP_401_UNAUTHORIZED)
 class VerifyOTPView(APIView):
@@ -151,6 +205,7 @@ class VerifyOTPView(APIView):
                     refresh = RefreshToken.for_user(user)
                     return Response({
                         'message': 'Email verified successfully.',
+                        'status': '200',
                     }, status=status.HTTP_200_OK)
                 return Response({"error": "Invalid OTP code."}, status=status.HTTP_400_BAD_REQUEST)
             except User.DoesNotExist:
@@ -212,7 +267,11 @@ class CategoryViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
-        return Response({"message": "Category created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
+        return Response({
+            "message": "Category created successfully", 
+            "data": serializer.data,
+            "status": "201"
+            }, status=status.HTTP_201_CREATED, headers=headers)
 class ServiceViewSet(viewsets.ModelViewSet):
     queryset = Service.objects.all()
     filter_backends = [DjangoFilterBackend, SearchFilter]
@@ -257,7 +316,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
-        return Response({"message": "Service created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
+        return Response({
+            "message": "Service created successfully", 
+            "data": serializer.data,
+            "status": "201"
+        }, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
@@ -295,77 +358,17 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 "message": "You have no services.",
                 "data": []
             }, status=status.HTTP_200_OK)
-# class ServiceViewSet(viewsets.ModelViewSet):
-    queryset = Service.objects.all()
-    def get_serializer_class(self):
-        if self.action == 'list':
-            return ServiceListSerializer
-        return ServiceSerializer
+    @action(detail=True, methods=['get'], url_path='id', permission_classes=[AllowAny])
+    def find_by_uuid(self, request, pk=None):
+        try:
+            service = Service.objects.get(id=pk)
+        except ValueError:
+            return Response({"message": "Service not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Service.DoesNotExist:
+            return Response({"message": "Service not found"}, status=status.HTTP_404_NOT_FOUND)
+        serializer = self.get_serializer(service)
+        return Response({"message": "Service found.", "data": serializer.data}, status=status.HTTP_200_OK)
 
-    def get_queryset(self):
-        if self.action == 'list':
-            return Service.objects.all()
-        return Service.objects.filter(created_by=self.request.user)
-
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            self.permission_classes = [IsAuthenticated]
-            if self.action == 'create':
-                self.permission_classes += [IsProvider]
-            elif self.action == 'destroy':
-                self.permission_classes += [IsAdmin]
-        elif self.action in ['retrieve']:
-            self.permission_classes = [IsAuthenticated]
-        elif self.action == 'list':
-            self.permission_classes = [IsAuthenticatedOrReadOnly]
-        return super(ServiceViewSet, self).get_permissions()
-    def list(self, request, *args, **kwargs):
-        queryset = self.filter_queryset(self.get_queryset())
-        serializer = self.get_serializer(queryset, many=True)
-        return Response({
-            "message": "List of all services.",
-            "data": serializer.data
-        }, status=status.HTTP_200_OK)
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        self.perform_create(serializer)
-        headers = self.get_success_headers(serializer.data)
-        return Response({"message": "Service created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
-    def update(self, request, *args, **kwargs):
-        instance = self.get_object()
-        if instance.created_by != request.user:
-            return Response({"message": "You are not allowed to update this service."}, status=status.HTTP_403_FORBIDDEN)
-        serializer = self.get_serializer(instance, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        self.perform_update(serializer)
-        return Response({"message": "Service updated successfully", "data": serializer.data}, status=status.HTTP_200_OK)
-    def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
-
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-        self.perform_destroy(instance)
-        return Response({"message": "Service deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
-
-    def perform_destroy(self, instance):
-        instance.delete()
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
-    def my_services(self, request):
-        user_services = Service.objects.filter(created_by=request.user)
-        serializer = self.get_serializer(user_services, many=True)
-        if user_services.exists():
-            return Response({
-                "message": "Here are your services.",
-                "data": serializer.data,
-                "status": "200"
-
-            }, status=status.HTTP_200_OK)
-        else:
-            return Response({
-                "message": "You have no services.",
-                "data": "data not found"
-            }, status=status.HTTP_404_NOT_FOUND)
 class ReviewViewSet(viewsets.ModelViewSet):
     queryset = Review.objects.all()
     serializer_class = ReviewSerializer
@@ -376,7 +379,11 @@ class ReviewViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
-        return Response({"message": "Review created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
+        return Response({
+            "message": "Review created successfully",
+            "data": serializer.data,
+            "status": "201"
+            }, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
@@ -435,37 +442,61 @@ class UnlikeViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         instance.delete()
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 class LocationViewSet(viewsets.ModelViewSet):
-    queryset = Location.objects.all()
     serializer_class = LocationSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Location.objects.filter(service__created_by=self.request.user)
+        user = self.request.user
+        logger.debug(f"Authenticated user: {user}")
+
+        # Fetch locations created by the authenticated user
+        locations = Location.objects.filter(created_by=user).distinct()
+        
+        logger.debug(f"Locations queryset: {locations.query}")
+        
+        return locations
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
-        return Response({"message": "Location created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
+        logger.debug(f"Location created: {serializer.data}")
+        return Response({
+            "message": "Location created successfully", 
+            "data": serializer.data,
+            "status": "201"
+        }, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
-        serializer.save()
+        serializer.save(created_by=self.request.user)
+
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
-        return Response({"message": "Location updated successfully", "data": serializer.data}, status=status.HTTP_200_OK)
+        logger.debug(f"Location updated: {serializer.data}")
+        return Response({
+            "message": "Location updated successfully",
+            "data": serializer.data
+        }, status=status.HTTP_200_OK)
+
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         self.perform_destroy(instance)
-        return Response({"message": "Location deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
+        logger.debug(f"Location deleted: {instance}")
+        return Response({
+            "message": "Location deleted successfully"
+        }, status=status.HTTP_204_NO_CONTENT)
 
     def perform_destroy(self, instance):
-        instance.delete()   
+        instance.delete()
 class ReportViewSet(viewsets.ModelViewSet):
     queryset = Report.objects.all()
     serializer_class = ReportSerializer
@@ -479,7 +510,10 @@ class ReportViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
-        return Response({"message": "Report created successfully", "data": serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
+        return Response({"message": "Report created successfully", 
+                         "data": serializer.data,
+                            "status": "201"
+                         }, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)

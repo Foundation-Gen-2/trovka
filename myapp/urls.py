@@ -14,7 +14,7 @@ router.register(r'roles', RoleViewSet)
 router.register(r'user-roles', UserRoleViewSet)
 router.register(r'reports', ReportViewSet)
 router.register(r'mails', MailViewSet)
-router.register(r'locations', LocationViewSet)
+router.register(r'locations', LocationViewSet, basename='location')
 router.register(r'upload', FileUploadView)
 
 urlpatterns = [
@@ -23,4 +23,6 @@ urlpatterns = [
     path('api/login/', LoginView.as_view(), name='login'),
     path('api/verify-otp/', VerifyOTPView.as_view(), name='verify-otp'),
     path('api/profile/', UserProfileView.as_view(), name='profile'),
+    path('api/update-role/', UpdateUserRoleView.as_view(), name='update-role'),
+
 ]
