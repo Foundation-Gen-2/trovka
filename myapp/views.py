@@ -78,32 +78,27 @@ class UserRegistrationView(APIView):
     def post(self, request):
         serializer = UserRegistrationSerializer(data=request.data)
         if serializer.is_valid():
-            user = serializer.save()
+            role_name = request.data.get('role', 'user')  # Default to 'user' if no role is provided
+            user = serializer.save(role=role_name)
             try:
-                role = Role.objects.get(role_name='user')
-                UserRole.objects.create(user=user, role=role)
-                try:
-                    send_mail(
-                        'Your OTP Code',
-                        f'Your OTP code is {user.otp_code}',
-                        settings.DEFAULT_FROM_EMAIL,
-                        [user.email],
-                    )
-                    user_data = UserSerializer(user).data
-                    user_data['role'] = RoleSerializer(role).data
-                    role = UserRole.objects.filter(user=user).first().role
-
-                    return Response({
-                        "message": "User created. Check your email for the OTP code.",
-                        "status": status.HTTP_201_CREATED,
-                        'role': {
-                            'role_name': role.role_name,
-                        }                        
-                    }, status=status.HTTP_201_CREATED)
-                except Exception as e:
-                    return Response({"message": f"User created but failed to send OTP email: {str(e)}"}, status=status.HTTP_201_CREATED)
-            except Role.DoesNotExist:
-                return Response({"error": "Role 'user' does not exist."}, status=status.HTTP_400_BAD_REQUEST)
+                send_mail(
+                    'Your OTP Code',
+                    f'Your OTP code is {user.otp_code}',
+                    settings.DEFAULT_FROM_EMAIL,
+                    [user.email],
+                )
+                return Response({
+                    "message": "User created. Check your email for the OTP code.",
+                    "status": status.HTTP_201_CREATED,
+                    "user": {
+                        "username": user.username,
+                    },
+                    "role": {
+                        "role_name": role_name,
+                    }
+                }, status=status.HTTP_201_CREATED)
+            except Exception as e:
+                return Response({"message": f"User created but failed to send OTP email: {str(e)}"}, status=status.HTTP_201_CREATED)
         else:
             errors = serializer.errors
             conflict_fields = [
@@ -134,6 +129,7 @@ class UserRegistrationView(APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
+
 class UpdateUserRoleView(APIView):
     permission_classes = [IsAuthenticated, IsProvider]  # Only admin can update roles
 

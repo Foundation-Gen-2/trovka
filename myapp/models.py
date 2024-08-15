@@ -8,11 +8,12 @@ from django.conf import settings
 import os
 import uuid
 class UserManager(BaseUserManager):
-    def create_user(self, email, username, password=None):
+    def create_user(self, email, username, role=None, password=None):
         if not email:
             raise ValueError("Users must have an email address")
         if not username:
             raise ValueError("Users must have a username")
+        
         user = self.model(
             email=self.normalize_email(email),
             username=username,
@@ -20,7 +21,13 @@ class UserManager(BaseUserManager):
         user.set_password(password)
         user.is_active = False  # Set user as inactive until they verify email
         user.save(using=self._db)
-        self.assign_default_role(user)
+        
+        # Assign role
+        if role:
+            self.assign_role(user, role)
+        else:
+            self.assign_default_role(user)
+        
         return user
 
     def create_superuser(self, email, username, password=None):
@@ -38,6 +45,11 @@ class UserManager(BaseUserManager):
     def assign_default_role(self, user, role_name='user'):
         role = Role.objects.get(role_name=role_name)
         UserRole.objects.create(user=user, role=role)
+
+    def assign_role(self, user, role_name):
+        role = Role.objects.get(role_name=role_name)
+        UserRole.objects.create(user=user, role=role)
+
 
 class User(AbstractBaseUser, PermissionsMixin):
     class Gender(models.TextChoices):

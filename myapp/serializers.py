@@ -8,10 +8,11 @@ class UserSimpleSerializer(serializers.ModelSerializer):
         fields = ['username','phone']
 class UserRegistrationSerializer(serializers.ModelSerializer):
     confirmPassword = serializers.CharField(style={'input_type': 'password'}, write_only=True)
+    role = serializers.CharField(required=False)
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'password', 'confirmPassword')
+        fields = ('id', 'username', 'email', 'password', 'confirmPassword', 'role')
         extra_kwargs = {'password': {'write_only': True}}
 
     def validate(self, data):
@@ -39,13 +40,16 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data.pop('confirmPassword')
+        role = validated_data.pop('role', 'user')  # Default to 'user' if no role is provided
         user = User.objects.create_user(
             email=validated_data['email'],
             username=validated_data['username'],
+            role=role,
             password=validated_data['password']
         )
         user.set_otp()
         return user
+
 
 class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
@@ -106,7 +110,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
 class ServiceSerializer(serializers.ModelSerializer):
     created_by = UserProfileSerializer(read_only=True)
     # created_by = serializers.CharField(source='created_by.username', read_only=True)
-    location = serializers.PrimaryKeyRelatedField(queryset=Location.objects.all())
+    location = LocationSerializer(read_only=True)
     phone_number = serializers.CharField(source='created_by.phone', read_only=True)
     categoryType = serializers.CharField(source='category.category_type.name', read_only=True)
     category = serializers.PrimaryKeyRelatedField(queryset=Category.objects.all())
